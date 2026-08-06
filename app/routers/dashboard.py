@@ -440,6 +440,18 @@ def get_pod_data_logs(
         description="Timestamp cursor from previous response"
     ),
     limit: int = Query(20, ge=1, le=100),
+    start_time: Optional[datetime] = Query(
+        None,
+        description="Only return logs recorded at or after this date/time (ISO 8601)"
+    ),
+    end_time: Optional[datetime] = Query(
+        None,
+        description="Only return logs recorded at or before this date/time (ISO 8601)"
+    ),
+    pod_ids: Optional[List[str]] = Query(
+        None,
+        description="Restrict results to these pod IDs"
+    ),
     db: Session = Depends(get_db)
 ):
     device = db.query(Device).filter(
@@ -457,6 +469,21 @@ def get_pod_data_logs(
         .join(Pod, PodDataLog.podID == Pod.podID)
         .filter(Pod.deviceID == device_id)
     )
+
+    if start_time and end_time and start_time > end_time:
+        raise HTTPException(
+            status_code=400,
+            detail="start_time must be earlier than or equal to end_time"
+        )
+
+    if start_time:
+        query = query.filter(PodDataLog.timeStamp >= start_time)
+
+    if end_time:
+        query = query.filter(PodDataLog.timeStamp <= end_time)
+
+    if pod_ids:
+        query = query.filter(PodDataLog.podID.in_(pod_ids))
 
     if cursor:
         query = query.filter(
@@ -490,7 +517,78 @@ def get_pod_data_logs(
             for log, pod in logs
         ],
         "nextCursor": next_cursor,
-        "hasMore": has_more
+        "hasMore": has_more,
+        "startTime": start_time,
+        "endTime": end_time
+    }
+
+
+@router.get("/devices/{device_id}/pod-data-series")
+def get_pod_data_series(
+    device_id: str,
+    start_time: Optional[datetime] = Query(
+        None,
+        description="Only return points recorded at or after this date/time (ISO 8601)"
+    ),
+    end_time: Optional[datetime] = Query(
+        None,
+        description="Only return points recorded at or before this date/time (ISO 8601)"
+    ),
+    pod_ids: Optional[List[str]] = Query(
+        None,
+        description="Restrict the series to these pod IDs"
+    ),
+    limit: int = Query(2000, ge=1, le=10000),
+    db: Session = Depends(get_db)
+):
+    """Chronological pod data points for charting (moisture + light intensity)."""
+    device = db.query(Device).filter(Device.deviceID == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if start_time and end_time and start_time > end_time:
+        raise HTTPException(
+            status_code=400,
+            detail="start_time must be earlier than or equal to end_time"
+        )
+
+    query = (
+        db.query(PodDataLog, Pod)
+        .join(Pod, PodDataLog.podID == Pod.podID)
+        .filter(Pod.deviceID == device_id)
+    )
+
+    if start_time:
+        query = query.filter(PodDataLog.timeStamp >= start_time)
+    if end_time:
+        query = query.filter(PodDataLog.timeStamp <= end_time)
+    if pod_ids:
+        query = query.filter(PodDataLog.podID.in_(pod_ids))
+
+    rows = (
+        query.order_by(PodDataLog.timeStamp.asc())
+        .limit(limit)
+        .all()
+    )
+
+    pods = db.query(Pod).filter(Pod.deviceID == device_id).all()
+
+    return {
+        "deviceID": device_id,
+        "startTime": start_time,
+        "endTime": end_time,
+        "pods": [{"podID": p.podID, "podName": p.podName} for p in pods],
+        "items": [
+            {
+                "id": log.id,
+                "podID": log.podID,
+                "podName": pod.podName,
+                "timeStamp": log.timeStamp,
+                "moistureLevel": log.moistureLevel,
+                "lightIntensity": log.lightIntensity,
+            }
+            for log, pod in rows
+        ],
     }
 
 @router.get("/devices/{device_id}/latest-data-logs")
@@ -563,6 +661,14 @@ def get_system_logs(
     device_id: str,
     cursor: Optional[int] = Query(None),
     limit: int = Query(2, ge=1, le=100),
+    start_time: Optional[datetime] = Query(
+        None,
+        description="Only return logs recorded at or after this date/time (ISO 8601)"
+    ),
+    end_time: Optional[datetime] = Query(
+        None,
+        description="Only return logs recorded at or before this date/time (ISO 8601)"
+    ),
     db: Session = Depends(get_db)
 ):
 
@@ -580,6 +686,18 @@ def get_system_logs(
         db.query(SystemLog)
         .filter(SystemLog.deviceID == device_id)
     )
+
+    if start_time and end_time and start_time > end_time:
+        raise HTTPException(
+            status_code=400,
+            detail="start_time must be earlier than or equal to end_time"
+        )
+
+    if start_time:
+        query = query.filter(SystemLog.timeStamp >= start_time)
+
+    if end_time:
+        query = query.filter(SystemLog.timeStamp <= end_time)
 
     if cursor:
         query = query.filter(
@@ -611,5 +729,7 @@ def get_system_logs(
             for log in logs
         ],
         "nextCursor": next_cursor,
-        "hasMore": has_more
+        "hasMore": has_more,
+        "startTime": start_time,
+        "endTime": end_time
     }

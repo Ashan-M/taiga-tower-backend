@@ -107,3 +107,35 @@ device-data
     }
   ]
 }
+## Date & time filtering (new)
+
+The log endpoints accept an optional inclusive date/time window. Values are ISO 8601
+(e.g. `2026-08-01T00:00:00Z`). Passing `start_time > end_time` returns HTTP 400.
+
+| Endpoint | Extra query params |
+| --- | --- |
+| `GET /devices/{device_id}/system-logs` | `start_time`, `end_time` |
+| `GET /devices/{device_id}/pod-data-logs` | `start_time`, `end_time`, `pod_ids` (repeatable) |
+| `GET /devices/{device_id}/pod-data-series` | `start_time`, `end_time`, `pod_ids` (repeatable), `limit` (default 2000, max 10000) |
+
+`GET /devices/{device_id}/pod-data-series` is new and returns every matching pod data
+point in chronological order together with the device's pod list, for charting:
+
+```json
+{
+  "deviceID": "001002",
+  "startTime": "2026-08-01T00:00:00Z",
+  "endTime": "2026-08-06T00:00:00Z",
+  "pods": [{ "podID": "001001", "podName": "POD 01" }],
+  "items": [
+    {
+      "id": 12,
+      "podID": "001001",
+      "podName": "POD 01",
+      "timeStamp": "2026-08-01T10:00:00Z",
+      "moistureLevel": 42.0,
+      "lightIntensity": 60.0
+    }
+  ]
+}
+```
