@@ -9,11 +9,15 @@ from app.database import get_db
 from app.models import Pod, Device, Plant, PodLog, PodDataLog, SystemLog
 from app.schemas.pod import CreatePodSchema, PodDataLogs, PodControlUpdate
 from app.schemas.plant import CreatePlantSchema
+import uuid
 
 from app.models import Device
 from app.schemas.device import CreateDeviceSchema, DeviceMasterControl
 from app.schemas.log import CreatePodDataLog, CreateSystemLog
 from app.logger import logger
+import app.mqtt.topics as mqtt_topics
+# from app.mqtt.service import MQTTService
+from app.mqtt.service import mqttService
 
 router = APIRouter(tags=["Dashboard"])
 router = APIRouter(tags=["Pods"])
@@ -102,6 +106,7 @@ def get_device_data(
         "deviceType": device.deviceType,
         "masterLight": device.masterLight,
         "masterPump": device.masterPump,
+        "sleepMode": device.sleepMode,
         "floater": device.floater,
         "pods": pod_data_list
     }
@@ -206,7 +211,7 @@ def get_all_plants(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.patch("/devices/{device_id}/master-controls")
-def update_master_controls(
+async def update_master_controls(
     device_id: str, 
     payload: DeviceMasterControl, 
     db: Session = Depends(get_db)
@@ -227,6 +232,9 @@ def update_master_controls(
         changes.append(f"Updated master Pump to {payload.masterPump}")
         # logger.info(f"Updated masterPump for device {device_id} to {payload.masterPump}")
 
+    if payload.sleepMode is not None and payload.sleepMode != device.sleepMode:
+            device.sleepMode = payload.sleepMode
+            changes.append(f"Updated master Pump to {payload.sleepMode}")
     if changes:
         new_system_log = SystemLog(
                                 deviceID=device_id,
@@ -239,6 +247,30 @@ def update_master_controls(
     db.commit()
     # db.refresh(new_system_log)
     logger.info(f"Master controls updated successfully for device {device_id}: {', '.join(changes)}")
+
+    message_id = str(uuid.uuid4())
+    mqtt_payload = {
+                "messageID": message_id,
+                "deviceID": device_id,
+                "masterLight": payload.masterLight,
+                "masterPump": payload.masterPump,
+                "sleepMode": payload.sleepMode
+            }
+    
+    mqtt_topic = mqtt_topics.device_command(device_id)
+    ack = await mqttService.publish_and_wait_ack(
+                topic=mqtt_topic,
+                payload=mqtt_payload,
+                ack_message_id=message_id,
+                timeout=10.0
+            )
+    
+    if ack.get("status") != "success":
+                logger.error(
+                    f"ESP32 rejected Master controll: "
+                    f"{ack}"
+                )
+
     return {"masterLight": device.masterLight,
             "masterPump": device.masterPump
             }
@@ -246,7 +278,7 @@ def update_master_controls(
 
 # 2. Add a new Pod
 @router.post("/devices/{device_id}/create-pod", status_code=status.HTTP_201_CREATED)
-def create_pod(
+async def create_pod(
     device_id: str, 
     payload: CreatePodSchema, 
     db: Session = Depends(get_db)
@@ -310,6 +342,35 @@ def create_pod(
 
         logger.info(f"Pod '{new_pod.podID}' created successfully for device '{device_id}' with plant '{plant.plantName}'.")
 
+        #mqtt payload and topic publish
+
+        message_id = str(uuid.uuid4())
+        mqtt_payload = {
+            "messageID": message_id,
+            "deviceID": device_id,
+            "podID": new_pod.podID,
+            "podName": new_pod.podName,
+            "mode": new_pod.mode,
+            "plantID": new_pod.plantID,
+            "defaultMoistureLevel": (new_pod.defaultMoistureLevel),
+            "defaultLightIntensity": (new_pod.defaultLightIntensity),
+            "manualMoistureLevel": (new_pod.manualMoistureLevel),
+            "manualLightIntensity": (new_pod.manualLightIntensity)
+        }
+
+        mqtt_topic = mqtt_topics.device_activate_pod(device_id)
+        ack = await mqttService.publish_and_wait_ack(
+            topic=mqtt_topic,
+            payload=mqtt_payload,
+            ack_message_id=message_id,
+            timeout=10.0
+        )
+
+        if ack.get("status") != "success":
+            logger.error(
+                f"ESP32 rejected pod activation: "
+                f"{ack}"
+            )
         return {
             "message": "Pod created successfully",
             "pod": {
@@ -330,19 +391,42 @@ def create_pod(
                 raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-@router.patch("/pods/{pod_id}/mode")
-def update_pod_mode(pod_id:str, payload: ModeUpdate, db: Session = Depends(get_db)):
+@router.patch("/pods/{device_id}/{pod_id}/mode")
+async def update_pod_mode(device_id:str, pod_id:str, payload: ModeUpdate, db: Session = Depends(get_db)):
     pod = db.query(Pod).filter(Pod.podID == pod_id).first()
     if not pod:
         raise HTTPException(status_code=404, detail="Pod not found")
     pod.mode = payload.mode
     db.commit()
+
+    message_id = str(uuid.uuid4())
+    mqtt_payload = {
+                    "messageID": message_id,
+                    "deviceID": device_id,
+                    "podID": pod_id,
+                    "mode": payload.mode
+                }
+        
+    mqtt_topic = mqtt_topics.pod_mode(device_id)
+    ack = await mqttService.publish_and_wait_ack(
+                    topic=mqtt_topic,
+                    payload=mqtt_payload,
+                    ack_message_id=message_id,
+                    timeout=10.0
+                )
+        
+    if ack.get("status") != "success":
+                    logger.error(
+                        f"ESP32 rejected Change Mode: "
+                        f"{ack}"
+                    )
     return {"message": f"Pod mode updated to {payload.mode}"}
 
 
 # 3. Micro-manage Pod Controls (Instant DB updates for sliders/switches)
-@router.patch("/pods/{pod_id}/controllers")
-def update_pod_controls(
+@router.patch("/pods/{device_id}/{pod_id}/controllers")
+async def update_pod_controls(
+    device_id: str,
     pod_id: str, 
     payload: PodControlUpdate, 
     db: Session = Depends(get_db)
@@ -371,6 +455,30 @@ def update_pod_controls(
         pod.manualMoistureLevel = update_data["manualMoistureLevel"]
 
     db.commit()
+
+    message_id = str(uuid.uuid4())
+    mqtt_payload = {
+                        "messageID": message_id,
+                        "deviceID": device_id,
+                        "podID": pod_id,
+                        "podPump": pod.podPump,
+                        "podLight": pod.podLight,
+                        "manualLightIntensity": pod.manualLightIntensity,
+                        "manualMoistureLevel": pod.manualMoistureLevel
+                    }
+            
+    mqtt_topic = mqtt_topics.pod_command(device_id)
+    ack = await mqttService.publish_and_wait_ack(
+                        topic=mqtt_topic,
+                        payload=mqtt_payload,
+                        ack_message_id=message_id,
+                        timeout=10.0
+                    )
+            
+    if ack.get("status") != "success":
+                logger.error(
+                            f"ESP32 rejected Change Mode: "
+                            f"{ack}")
     return {"status": "updated",
             "pod": {
                 "podID": pod.podID,

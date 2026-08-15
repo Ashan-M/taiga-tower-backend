@@ -139,3 +139,25 @@ point in chronological order together with the device's pod list, for charting:
   ]
 }
 ```
+
+
+MQTT
+
+from fastAPI - ESP32
+"devices/{deviceID}/activate"
+user active a device from front end. then db updates and this topic should be published with deviceID and wait for the ack from esp32
+
+"devices/{deviceID}/activatePod"
+user active a device from front end. then db updates and this topic should be published with deviceID,podID, podName, mode, plantID, defaultMoistureLevel, defaultLightIntensity, manualMoistureLevel, manualLightIntensity and wait for the ack from esp32
+
+"devices/{deviceID}/command"
+user change the status of master light and master pump. then db updates and this topic should be published with deviceID, masterLight, masterPump and wait for the ack from esp32
+
+"devices/{deviceID}/{podID}/command"
+user change the status of pod light and pod pump, set moisture level or lightIntensity manually. then db updates and this topic should be published with deviceID, masterLight, masterPump and wait for the ack from esp32
+
+from ESP32 - fastAPI
+"devices/{deviceID}/data"
+esp send a payload of timestamp with podID, moistureLevel, lightIntensity x6 in a single payload for 6 pods (currently activated pods) then server send an ack db updates with the log.
+
+

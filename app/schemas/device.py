@@ -17,3 +17,4 @@ class CreateDeviceSchema(BaseModel):
 class DeviceMasterControl(BaseModel):
     masterLight: Optional[bool] = None
     masterPump: Optional[bool] = None
+    sleepMode: Optional[bool] = None
