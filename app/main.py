@@ -5,13 +5,30 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine, Base
 import app.models  # Ensures all models are registered with Base
-from app.routers import dashboard
+from app.routers import dashboard, mqtt
 from app.logger import logger
+from contextlib import asynccontextmanager
 
+from app.mqtt.client import MQTTClient
+from app.mqtt.service import mqttService
 # Automatically create tables in PostgreSQL on startup
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="TaigaTower System API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    print("Starting application...")
+
+    mqttService.connect()
+
+    yield
+
+    print("Shutting down application...")
+
+    mqttService.disconnect()
+
+app = FastAPI(title="TaigaTower System API", lifespan=lifespan)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -41,6 +58,7 @@ app.add_middleware(
 )
 
 app.include_router(dashboard.router)
+app.include_router(mqtt.router)
 
 @app.get("/", tags=["Health"])
 def health_check():

@@ -11,6 +11,7 @@ class Device(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     masterLight = Column(Boolean, default=False)
     masterPump = Column(Boolean, default=False)
+    sleepMode = Column(Boolean, default=False)
     floater = Column(Boolean, default=False)
 
     pod = relationship("Pod", back_populates="device")

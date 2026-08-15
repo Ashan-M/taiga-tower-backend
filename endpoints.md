@@ -107,3 +107,57 @@ device-data
     }
   ]
 }
+## Date & time filtering (new)
+
+The log endpoints accept an optional inclusive date/time window. Values are ISO 8601
+(e.g. `2026-08-01T00:00:00Z`). Passing `start_time > end_time` returns HTTP 400.
+
+| Endpoint | Extra query params |
+| --- | --- |
+| `GET /devices/{device_id}/system-logs` | `start_time`, `end_time` |
+| `GET /devices/{device_id}/pod-data-logs` | `start_time`, `end_time`, `pod_ids` (repeatable) |
+| `GET /devices/{device_id}/pod-data-series` | `start_time`, `end_time`, `pod_ids` (repeatable), `limit` (default 2000, max 10000) |
+
+`GET /devices/{device_id}/pod-data-series` is new and returns every matching pod data
+point in chronological order together with the device's pod list, for charting:
+
+```json
+{
+  "deviceID": "001002",
+  "startTime": "2026-08-01T00:00:00Z",
+  "endTime": "2026-08-06T00:00:00Z",
+  "pods": [{ "podID": "001001", "podName": "POD 01" }],
+  "items": [
+    {
+      "id": 12,
+      "podID": "001001",
+      "podName": "POD 01",
+      "timeStamp": "2026-08-01T10:00:00Z",
+      "moistureLevel": 42.0,
+      "lightIntensity": 60.0
+    }
+  ]
+}
+```
+
+
+MQTT
+
+from fastAPI - ESP32
+"devices/{deviceID}/activate"
+user active a device from front end. then db updates and this topic should be published with deviceID and wait for the ack from esp32
+
+"devices/{deviceID}/activatePod"
+user active a device from front end. then db updates and this topic should be published with deviceID,podID, podName, mode, plantID, defaultMoistureLevel, defaultLightIntensity, manualMoistureLevel, manualLightIntensity and wait for the ack from esp32
+
+"devices/{deviceID}/command"
+user change the status of master light and master pump. then db updates and this topic should be published with deviceID, masterLight, masterPump and wait for the ack from esp32
+
+"devices/{deviceID}/{podID}/command"
+user change the status of pod light and pod pump, set moisture level or lightIntensity manually. then db updates and this topic should be published with deviceID, masterLight, masterPump and wait for the ack from esp32
+
+from ESP32 - fastAPI
+"devices/{deviceID}/data"
+esp send a payload of timestamp with podID, moistureLevel, lightIntensity x6 in a single payload for 6 pods (currently activated pods) then server send an ack db updates with the log.
+
+

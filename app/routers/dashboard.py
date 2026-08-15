@@ -9,11 +9,15 @@ from app.database import get_db
 from app.models import Pod, Device, Plant, PodLog, PodDataLog, SystemLog
 from app.schemas.pod import CreatePodSchema, PodDataLogs, PodControlUpdate
 from app.schemas.plant import CreatePlantSchema
+import uuid
 
 from app.models import Device
 from app.schemas.device import CreateDeviceSchema, DeviceMasterControl
 from app.schemas.log import CreatePodDataLog, CreateSystemLog
 from app.logger import logger
+import app.mqtt.topics as mqtt_topics
+# from app.mqtt.service import MQTTService
+from app.mqtt.service import mqttService
 
 router = APIRouter(tags=["Dashboard"])
 router = APIRouter(tags=["Pods"])
@@ -102,6 +106,7 @@ def get_device_data(
         "deviceType": device.deviceType,
         "masterLight": device.masterLight,
         "masterPump": device.masterPump,
+        "sleepMode": device.sleepMode,
         "floater": device.floater,
         "pods": pod_data_list
     }
@@ -206,7 +211,7 @@ def get_all_plants(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.patch("/devices/{device_id}/master-controls")
-def update_master_controls(
+async def update_master_controls(
     device_id: str, 
     payload: DeviceMasterControl, 
     db: Session = Depends(get_db)
@@ -227,6 +232,9 @@ def update_master_controls(
         changes.append(f"Updated master Pump to {payload.masterPump}")
         # logger.info(f"Updated masterPump for device {device_id} to {payload.masterPump}")
 
+    if payload.sleepMode is not None and payload.sleepMode != device.sleepMode:
+            device.sleepMode = payload.sleepMode
+            changes.append(f"Updated master Pump to {payload.sleepMode}")
     if changes:
         new_system_log = SystemLog(
                                 deviceID=device_id,
@@ -239,6 +247,30 @@ def update_master_controls(
     db.commit()
     # db.refresh(new_system_log)
     logger.info(f"Master controls updated successfully for device {device_id}: {', '.join(changes)}")
+
+    message_id = str(uuid.uuid4())
+    mqtt_payload = {
+                "messageID": message_id,
+                "deviceID": device_id,
+                "masterLight": payload.masterLight,
+                "masterPump": payload.masterPump,
+                "sleepMode": payload.sleepMode
+            }
+    
+    mqtt_topic = mqtt_topics.device_command(device_id)
+    ack = await mqttService.publish_and_wait_ack(
+                topic=mqtt_topic,
+                payload=mqtt_payload,
+                ack_message_id=message_id,
+                timeout=10.0
+            )
+    
+    if ack.get("status") != "success":
+                logger.error(
+                    f"ESP32 rejected Master controll: "
+                    f"{ack}"
+                )
+
     return {"masterLight": device.masterLight,
             "masterPump": device.masterPump
             }
@@ -246,7 +278,7 @@ def update_master_controls(
 
 # 2. Add a new Pod
 @router.post("/devices/{device_id}/create-pod", status_code=status.HTTP_201_CREATED)
-def create_pod(
+async def create_pod(
     device_id: str, 
     payload: CreatePodSchema, 
     db: Session = Depends(get_db)
@@ -310,6 +342,35 @@ def create_pod(
 
         logger.info(f"Pod '{new_pod.podID}' created successfully for device '{device_id}' with plant '{plant.plantName}'.")
 
+        #mqtt payload and topic publish
+
+        message_id = str(uuid.uuid4())
+        mqtt_payload = {
+            "messageID": message_id,
+            "deviceID": device_id,
+            "podID": new_pod.podID,
+            "podName": new_pod.podName,
+            "mode": new_pod.mode,
+            "plantID": new_pod.plantID,
+            "defaultMoistureLevel": (new_pod.defaultMoistureLevel),
+            "defaultLightIntensity": (new_pod.defaultLightIntensity),
+            "manualMoistureLevel": (new_pod.manualMoistureLevel),
+            "manualLightIntensity": (new_pod.manualLightIntensity)
+        }
+
+        mqtt_topic = mqtt_topics.device_activate_pod(device_id)
+        ack = await mqttService.publish_and_wait_ack(
+            topic=mqtt_topic,
+            payload=mqtt_payload,
+            ack_message_id=message_id,
+            timeout=10.0
+        )
+
+        if ack.get("status") != "success":
+            logger.error(
+                f"ESP32 rejected pod activation: "
+                f"{ack}"
+            )
         return {
             "message": "Pod created successfully",
             "pod": {
@@ -330,19 +391,42 @@ def create_pod(
                 raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-@router.patch("/pods/{pod_id}/mode")
-def update_pod_mode(pod_id:str, payload: ModeUpdate, db: Session = Depends(get_db)):
+@router.patch("/pods/{device_id}/{pod_id}/mode")
+async def update_pod_mode(device_id:str, pod_id:str, payload: ModeUpdate, db: Session = Depends(get_db)):
     pod = db.query(Pod).filter(Pod.podID == pod_id).first()
     if not pod:
         raise HTTPException(status_code=404, detail="Pod not found")
     pod.mode = payload.mode
     db.commit()
+
+    message_id = str(uuid.uuid4())
+    mqtt_payload = {
+                    "messageID": message_id,
+                    "deviceID": device_id,
+                    "podID": pod_id,
+                    "mode": payload.mode
+                }
+        
+    mqtt_topic = mqtt_topics.pod_mode(device_id)
+    ack = await mqttService.publish_and_wait_ack(
+                    topic=mqtt_topic,
+                    payload=mqtt_payload,
+                    ack_message_id=message_id,
+                    timeout=10.0
+                )
+        
+    if ack.get("status") != "success":
+                    logger.error(
+                        f"ESP32 rejected Change Mode: "
+                        f"{ack}"
+                    )
     return {"message": f"Pod mode updated to {payload.mode}"}
 
 
 # 3. Micro-manage Pod Controls (Instant DB updates for sliders/switches)
-@router.patch("/pods/{pod_id}/controllers")
-def update_pod_controls(
+@router.patch("/pods/{device_id}/{pod_id}/controllers")
+async def update_pod_controls(
+    device_id: str,
     pod_id: str, 
     payload: PodControlUpdate, 
     db: Session = Depends(get_db)
@@ -371,6 +455,30 @@ def update_pod_controls(
         pod.manualMoistureLevel = update_data["manualMoistureLevel"]
 
     db.commit()
+
+    message_id = str(uuid.uuid4())
+    mqtt_payload = {
+                        "messageID": message_id,
+                        "deviceID": device_id,
+                        "podID": pod_id,
+                        "podPump": pod.podPump,
+                        "podLight": pod.podLight,
+                        "manualLightIntensity": pod.manualLightIntensity,
+                        "manualMoistureLevel": pod.manualMoistureLevel
+                    }
+            
+    mqtt_topic = mqtt_topics.pod_command(device_id)
+    ack = await mqttService.publish_and_wait_ack(
+                        topic=mqtt_topic,
+                        payload=mqtt_payload,
+                        ack_message_id=message_id,
+                        timeout=10.0
+                    )
+            
+    if ack.get("status") != "success":
+                logger.error(
+                            f"ESP32 rejected Change Mode: "
+                            f"{ack}")
     return {"status": "updated",
             "pod": {
                 "podID": pod.podID,
@@ -440,6 +548,18 @@ def get_pod_data_logs(
         description="Timestamp cursor from previous response"
     ),
     limit: int = Query(20, ge=1, le=100),
+    start_time: Optional[datetime] = Query(
+        None,
+        description="Only return logs recorded at or after this date/time (ISO 8601)"
+    ),
+    end_time: Optional[datetime] = Query(
+        None,
+        description="Only return logs recorded at or before this date/time (ISO 8601)"
+    ),
+    pod_ids: Optional[List[str]] = Query(
+        None,
+        description="Restrict results to these pod IDs"
+    ),
     db: Session = Depends(get_db)
 ):
     device = db.query(Device).filter(
@@ -457,6 +577,21 @@ def get_pod_data_logs(
         .join(Pod, PodDataLog.podID == Pod.podID)
         .filter(Pod.deviceID == device_id)
     )
+
+    if start_time and end_time and start_time > end_time:
+        raise HTTPException(
+            status_code=400,
+            detail="start_time must be earlier than or equal to end_time"
+        )
+
+    if start_time:
+        query = query.filter(PodDataLog.timeStamp >= start_time)
+
+    if end_time:
+        query = query.filter(PodDataLog.timeStamp <= end_time)
+
+    if pod_ids:
+        query = query.filter(PodDataLog.podID.in_(pod_ids))
 
     if cursor:
         query = query.filter(
@@ -490,7 +625,78 @@ def get_pod_data_logs(
             for log, pod in logs
         ],
         "nextCursor": next_cursor,
-        "hasMore": has_more
+        "hasMore": has_more,
+        "startTime": start_time,
+        "endTime": end_time
+    }
+
+
+@router.get("/devices/{device_id}/pod-data-series")
+def get_pod_data_series(
+    device_id: str,
+    start_time: Optional[datetime] = Query(
+        None,
+        description="Only return points recorded at or after this date/time (ISO 8601)"
+    ),
+    end_time: Optional[datetime] = Query(
+        None,
+        description="Only return points recorded at or before this date/time (ISO 8601)"
+    ),
+    pod_ids: Optional[List[str]] = Query(
+        None,
+        description="Restrict the series to these pod IDs"
+    ),
+    limit: int = Query(2000, ge=1, le=10000),
+    db: Session = Depends(get_db)
+):
+    """Chronological pod data points for charting (moisture + light intensity)."""
+    device = db.query(Device).filter(Device.deviceID == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if start_time and end_time and start_time > end_time:
+        raise HTTPException(
+            status_code=400,
+            detail="start_time must be earlier than or equal to end_time"
+        )
+
+    query = (
+        db.query(PodDataLog, Pod)
+        .join(Pod, PodDataLog.podID == Pod.podID)
+        .filter(Pod.deviceID == device_id)
+    )
+
+    if start_time:
+        query = query.filter(PodDataLog.timeStamp >= start_time)
+    if end_time:
+        query = query.filter(PodDataLog.timeStamp <= end_time)
+    if pod_ids:
+        query = query.filter(PodDataLog.podID.in_(pod_ids))
+
+    rows = (
+        query.order_by(PodDataLog.timeStamp.asc())
+        .limit(limit)
+        .all()
+    )
+
+    pods = db.query(Pod).filter(Pod.deviceID == device_id).all()
+
+    return {
+        "deviceID": device_id,
+        "startTime": start_time,
+        "endTime": end_time,
+        "pods": [{"podID": p.podID, "podName": p.podName} for p in pods],
+        "items": [
+            {
+                "id": log.id,
+                "podID": log.podID,
+                "podName": pod.podName,
+                "timeStamp": log.timeStamp,
+                "moistureLevel": log.moistureLevel,
+                "lightIntensity": log.lightIntensity,
+            }
+            for log, pod in rows
+        ],
     }
 
 @router.get("/devices/{device_id}/latest-data-logs")
@@ -563,6 +769,14 @@ def get_system_logs(
     device_id: str,
     cursor: Optional[int] = Query(None),
     limit: int = Query(2, ge=1, le=100),
+    start_time: Optional[datetime] = Query(
+        None,
+        description="Only return logs recorded at or after this date/time (ISO 8601)"
+    ),
+    end_time: Optional[datetime] = Query(
+        None,
+        description="Only return logs recorded at or before this date/time (ISO 8601)"
+    ),
     db: Session = Depends(get_db)
 ):
 
@@ -580,6 +794,18 @@ def get_system_logs(
         db.query(SystemLog)
         .filter(SystemLog.deviceID == device_id)
     )
+
+    if start_time and end_time and start_time > end_time:
+        raise HTTPException(
+            status_code=400,
+            detail="start_time must be earlier than or equal to end_time"
+        )
+
+    if start_time:
+        query = query.filter(SystemLog.timeStamp >= start_time)
+
+    if end_time:
+        query = query.filter(SystemLog.timeStamp <= end_time)
 
     if cursor:
         query = query.filter(
@@ -611,5 +837,7 @@ def get_system_logs(
             for log in logs
         ],
         "nextCursor": next_cursor,
-        "hasMore": has_more
+        "hasMore": has_more,
+        "startTime": start_time,
+        "endTime": end_time
     }
