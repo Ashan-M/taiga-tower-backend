@@ -349,6 +349,7 @@ async def create_pod(
             "messageID": message_id,
             "deviceID": device_id,
             "podID": new_pod.podID,
+            "slot": int(new_pod.podName[-1]),
             "podName": new_pod.podName,
             "mode": new_pod.mode,
             "plantID": new_pod.plantID,
