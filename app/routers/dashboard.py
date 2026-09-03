@@ -7,7 +7,6 @@ from sqlalchemy import func
 
 from app.database import get_db
 from app.models import Pod, Device, Plant, PodLog, PodDataLog, SystemLog
-from app.mqtt.schemas import PodData
 from app.schemas.pod import CreatePodSchema, PodDataLogs, PodControlUpdate
 from app.schemas.plant import CreatePlantSchema
 import uuid
@@ -520,9 +519,40 @@ def get_system_logs(
         ]
     }
 
-class CreatePodsDataLog(BaseModel):
-    deviceID: str
-    pods: List[PodData]
+@router.post("/devices/{device_id}/pods/data-log")
+def create_pods_data_log(
+    device_id: str,
+    payload: CreatePodsDataLog,
+    db: Session = Depends(get_db)
+):
+    created_logs = []
+
+    for pod_data in payload.pods:
+
+        pod = db.query(Pod).filter(
+            Pod.podID == pod_data.podID
+        ).first()
+
+        if not pod:
+            continue
+
+        data_log = PodDataLog(
+            podID=pod_data.podID,
+            moistureLevel=pod_data.moistureLevel,
+            lightIntensity=pod_data.lightIntensity
+        )
+
+        db.add(data_log)
+        created_logs.append(pod_data.podID)
+
+    db.commit()
+
+    return {
+        "status": "success",
+        "deviceID": device_id,
+        "podsLogged": created_logs,
+        "count": len(created_logs)
+    }
 
 @router.get("/devices/{device_id}/pod-data-logs")
 def get_pod_data_logs(
