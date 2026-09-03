@@ -7,13 +7,14 @@ from sqlalchemy import func
 
 from app.database import get_db
 from app.models import Pod, Device, Plant, PodLog, PodDataLog, SystemLog
+from app.mqtt.schemas import PodData
 from app.schemas.pod import CreatePodSchema, PodDataLogs, PodControlUpdate
 from app.schemas.plant import CreatePlantSchema
 import uuid
 
 from app.models import Device
 from app.schemas.device import CreateDeviceSchema, DeviceMasterControl
-from app.schemas.log import CreatePodDataLog, CreateSystemLog
+from app.schemas.log import CreatePodDataLog, CreateSystemLog, CreatePodsDataLog
 from app.logger import logger
 import app.mqtt.topics as mqtt_topics
 # from app.mqtt.service import MQTTService
@@ -519,27 +520,9 @@ def get_system_logs(
         ]
     }
 
-@router.post("/pods/{pod_id}/data-log")
-def create_pod_data_log(
-    pod_id: str,
-    payload: CreatePodDataLog,
-    db: Session = Depends(get_db)
-):
-    pod = db.query(Pod).filter(Pod.podID == pod_id).first()
-    if not pod:
-        raise HTTPException(
-            status_code=404,
-            detail="Pod not found"
-        )
-    data_log = PodDataLog(
-        podID=pod_id,
-        moistureLevel=payload.moistureLevel,
-        lightIntensity=payload.lightIntensity
-    )
-
-    db.add(data_log)
-    db.commit()
-    db.refresh(data_log)
+class CreatePodsDataLog(BaseModel):
+    deviceID: str
+    pods: List[PodData]
 
 @router.get("/devices/{device_id}/pod-data-logs")
 def get_pod_data_logs(

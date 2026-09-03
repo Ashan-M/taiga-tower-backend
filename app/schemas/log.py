@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional
+from typing import Optional, List
+
+from app.mqtt.schemas import PodData
 
 
 # class CreateLogSchema(BaseMod
@@ -9,3 +11,7 @@ class CreatePodDataLog(BaseModel):
 
 class CreateSystemLog(BaseModel):
     message: str = Field(..., example="System log message")
+
+class CreatePodsDataLog(BaseModel):
+    deviceID: str
+    pods: List[PodData]
