@@ -13,7 +13,7 @@ import uuid
 
 from app.models import Device
 from app.schemas.device import CreateDeviceSchema, DeviceMasterControl
-from app.schemas.log import CreatePodDataLog, CreateSystemLog
+from app.schemas.log import CreatePodDataLog, CreateSystemLog, CreatePodsDataLog
 from app.logger import logger
 import app.mqtt.topics as mqtt_topics
 # from app.mqtt.service import MQTTService
@@ -349,6 +349,7 @@ async def create_pod(
             "messageID": message_id,
             "deviceID": device_id,
             "podID": new_pod.podID,
+            "slot": int(new_pod.podName[-1]),
             "podName": new_pod.podName,
             "mode": new_pod.mode,
             "plantID": new_pod.plantID,
@@ -518,27 +519,40 @@ def get_system_logs(
         ]
     }
 
-@router.post("/pods/{pod_id}/data-log")
-def create_pod_data_log(
-    pod_id: str,
-    payload: CreatePodDataLog,
+@router.post("/devices/{device_id}/pods/data-log")
+def create_pods_data_log(
+    device_id: str,
+    payload: CreatePodsDataLog,
     db: Session = Depends(get_db)
 ):
-    pod = db.query(Pod).filter(Pod.podID == pod_id).first()
-    if not pod:
-        raise HTTPException(
-            status_code=404,
-            detail="Pod not found"
-        )
-    data_log = PodDataLog(
-        podID=pod_id,
-        moistureLevel=payload.moistureLevel,
-        lightIntensity=payload.lightIntensity
-    )
+    created_logs = []
 
-    db.add(data_log)
+    for pod_data in payload.pods:
+
+        pod = db.query(Pod).filter(
+            Pod.podID == pod_data.podID
+        ).first()
+
+        if not pod:
+            continue
+
+        data_log = PodDataLog(
+            podID=pod_data.podID,
+            moistureLevel=pod_data.moistureLevel,
+            lightIntensity=pod_data.lightIntensity
+        )
+
+        db.add(data_log)
+        created_logs.append(pod_data.podID)
+
     db.commit()
-    db.refresh(data_log)
+
+    return {
+        "status": "success",
+        "deviceID": device_id,
+        "podsLogged": created_logs,
+        "count": len(created_logs)
+    }
 
 @router.get("/devices/{device_id}/pod-data-logs")
 def get_pod_data_logs(
