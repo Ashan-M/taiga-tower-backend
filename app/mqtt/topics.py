@@ -21,6 +21,9 @@ def pod_mode(device_id: str) -> str:
 def device_data(device_id: str) -> str:
     return f"{PROJECT_NAME}/devices/{device_id}/data"
 
+def delete_pod(device_id: str) -> str:
+    return f"{PROJECT_NAME}/devices/{device_id}/removePod"
+
 
 # ACK topics
 
@@ -42,6 +45,9 @@ def pod_command_ack(device_id: str, pod_id: str) -> str:
 
 def device_data_ack(device_id: str) -> str:
     return f"{PROJECT_NAME}/devices/{device_id}/ack/data"
+
+def update_plant_configs() -> str:
+    return f"taiga-tower/plants/update"
 
 
 # Backend subscriptions

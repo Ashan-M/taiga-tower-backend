@@ -8,7 +8,11 @@ class PodDataLog(Base):
     __tablename__ = "podDataLog"
 
     id = Column(Integer, primary_key=True, autoincrement=True)  # Composite or surrogate PK
-    podID = Column(String, ForeignKey("pods.podID"), nullable=False)
+    podID = Column(
+        String,
+        ForeignKey("pods.podID", ondelete="SET NULL"),
+        nullable=True
+    )
     timeStamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     moistureLevel = Column(Float, nullable=True)
     lightIntensity = Column(Float, nullable=True)
@@ -25,8 +29,6 @@ class PodLog(Base):
     deviceID = Column(String, ForeignKey("devices.deviceID"), nullable=False)
     timeStamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     message = Column(String, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
     # Relationships
     pod = relationship("Pod", back_populates="pod_logs")
 
@@ -35,7 +37,7 @@ class SystemLog(Base):
     __tablename__ = "systemLogs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    deviceID = Column(String, ForeignKey("devices.deviceID"), nullable=False)
+    deviceID = Column(String, ForeignKey("devices.deviceID"), nullable=True)
     podID = Column(String, ForeignKey("pods.podID"), nullable=True)
     timeStamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     message = Column(String, nullable=False)
