@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from app.mqtt.client import MQTTClient
 from app.mqtt.service import mqttService
 # Automatically create tables in PostgreSQL on startup
-Base.metadata.create_all(bind=engine)
+# Base.metadata.create_all(bind=engine)
 
 
 @asynccontextmanager
