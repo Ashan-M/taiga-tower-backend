@@ -49,6 +49,7 @@ class MQTTService:
             self.username,
             self.password
         )
+        self.client.tls_set()
 
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
@@ -203,6 +204,54 @@ class MQTTService:
             f"{reason_code}"
         )
         self.connected = False
+
+    async def publish_mqtt_topic(
+                self, topic: str, payload: dict
+        ) -> dict:
+            loop = asyncio.get_running_loop()
+            # future = loop.create_future()
+            print("========== MQTT PUBLISH DEBUG ==========")
+            print("Client:", self.client)
+            print("Client connected:", self.client.is_connected())
+            print("Topic:", topic)
+            print("Payload:", json.dumps(payload))
+            print("========================================")
+            try:
+                result = self.client.publish(
+                    topic,
+                    json.dumps(payload)
+                )
+
+                print("Publish result:", result)
+                print("Publish rc:", result.rc)
+
+                if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                    raise RuntimeError(
+                        f"MQTT publish failed: {result.rc}"
+                    )
+
+                # Wait up to 10 seconds for Paho to complete the publish
+                await asyncio.wait_for(
+                    asyncio.to_thread(result.wait_for_publish),
+                    timeout=10
+                )
+
+                if not result.is_published():
+                    raise TimeoutError(
+                        "MQTT publish did not complete within 10 seconds"
+                    )
+
+                print(f"MQTT publish → {topic} | {json.dumps(payload)}")
+
+                return {
+                    "status": "success",
+                    "topic": topic
+                }
+
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"MQTT publish timed out after 10 seconds: {topic}"
+                )
 
     async def publish_and_wait_ack(
             self, topic: str, payload: dict, ack_message_id: str, timeout: float = 10.0

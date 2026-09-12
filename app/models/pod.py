@@ -22,11 +22,11 @@ class Pod(Base):
     manualLightIntensity = Column(Float, nullable=True)
     defaultMoistureLevel = Column(Float, nullable=True)
     defaultLightIntensity = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    podPumpTimer = Column(Integer, nullable=True)  # Timer in seconds
 
     # Relationships
     device = relationship("Device", back_populates="pod")
     plant = relationship("Plant", back_populates="pod")
-    data_logs = relationship("PodDataLog", back_populates="pod")
+    data_logs = relationship("PodDataLog", back_populates="pod", passive_deletes=True)
     pod_logs = relationship("PodLog", back_populates="pod")
     systemLogs = relationship("SystemLog", back_populates="pod")

@@ -49,10 +49,12 @@ async def log_requests(request: Request, call_next):
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://taiga-tower.web.app",
-        "https://taiga-tower.firebaseapp.com",
+    allow_origins=["*"
+        # "http://localhost:5173",
+        # "http://localhost:8080",
+        # "http://192.168.12.92",
+        # "https://taiga-tower.web.app",
+        # "https://taiga-tower.firebaseapp.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],

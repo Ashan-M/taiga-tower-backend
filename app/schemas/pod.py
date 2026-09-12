@@ -44,4 +44,4 @@ class PodControlUpdate(BaseModel):
     podLight: Optional[bool] = None
     manualLightIntensity: Optional[float] = Field(None, ge=0.0, le=100.0)
     manualMoistureLevel: Optional[float] = Field(None, ge=0.0, le=100.0)
-
+    podPumpTimer: Optional[int] = Field(None, ge=0)  # Timer in seconds
