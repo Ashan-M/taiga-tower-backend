@@ -15,9 +15,8 @@ if not DATABASE_URL:
 
 engine = create_engine(
     DATABASE_URL,
+    poolclass=NullPool,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=2,
 )
 
 SessionLocal = sessionmaker(
