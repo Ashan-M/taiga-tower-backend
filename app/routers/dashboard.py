@@ -95,11 +95,12 @@ def get_device_data(
             "manualMoistureLevel": pod.manualMoistureLevel,
             "manualLightIntensity": pod.manualLightIntensity,
             "podPump": pod.podPump,
-            "podLight": pod.podLight
+            "podLight": pod.podLight,
+            "podPumpTimer": pod.podPumpTimer
         }
         pod_data_list.append(pod_data)
 
-    print(pod_data_list)
+    # print(pod_data_list)
 
     return {
         "deviceID": device.deviceID,
@@ -181,7 +182,8 @@ def create_plant(
             lightIntensity=payload.lightIntensity,
             created_at=datetime.utcnow()
         )
-
+        new_system_log = SystemLog(message=f"New Plant {payload.plantName} added. ")
+        db.add(new_system_log)
         db.add(new_plant)
         db.commit()
         db.refresh(new_plant)
@@ -200,6 +202,37 @@ def create_plant(
     except Exception as e:
             logger.error(f"Failed to create plant: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.patch("/plants/{plant_id}")
+async def edit_plant_data(plant_id: str, payload: CreatePlantSchema, db: Session = Depends(get_db)):
+    plant = db.query(Plant).filter(Plant.plantID == plant_id).first()
+    if not plant:
+         raise HTTPException(status_code=404, detail="Plant not found")
+    plant.plantName = payload.plantName
+    plant.maxGrowthPeriod = payload.maxGrowthPeriod
+    plant.moistureLevel = payload.moistureLevel
+    plant.lightIntensity = payload.lightIntensity
+    new_system_log = SystemLog(message=f"{plant.plantName} Update configurations")
+    db.add(new_system_log)
+    db.commit()
+    db.refresh(plant)
+    # publish a message to all pods with the edited plant
+
+    mqtt_payload = {
+         "plantID": plant_id,
+         "plantName": plant.plantName,
+         "maxGrowthPeriod": plant.maxGrowthPeriod,
+         "moistureLevel": plant.moistureLevel,
+         "lightIntensity": plant.lightIntensity
+
+    }
+    topic = mqtt_topics.update_plant_configs()
+
+    await mqttService.publish_mqtt_topic(topic, mqtt_payload)
+    return{
+         "status": 200,
+         "message": "Plant data edited sucess"
+    }
 
 @router.get("/plants", status_code=status.HTTP_200_OK)
 def get_all_plants(db: Session = Depends(get_db)):
@@ -222,19 +255,21 @@ async def update_master_controls(
         raise HTTPException(status_code=404, detail="Device not found")
 
     changes = []
+    masterLightStat = "ON" if payload.masterLight else "OFF"
+    sleepModeStat = "Activated" if payload.sleepMode else "Deactivated"
     if payload.masterLight is not None and payload.masterLight != device.masterLight:
         device.masterLight = payload.masterLight
-        changes.append(f"Updated master Light to {payload.masterLight}")
+        changes.append(f"Updated Main Light to {masterLightStat}")
         # logger.info(f"Updated masterLight for device {device_id} to {payload.masterLight}")
 
-    if payload.masterPump is not None and payload.masterPump != device.masterPump:
-        device.masterPump = payload.masterPump
-        changes.append(f"Updated master Pump to {payload.masterPump}")
-        # logger.info(f"Updated masterPump for device {device_id} to {payload.masterPump}")
+    # if payload.masterPump is not None and payload.masterPump != device.masterPump:
+    #     device.masterPump = payload.masterPump
+    #     changes.append(f"Updated master Pump to {payload.masterPump}")
+    #     # logger.info(f"Updated masterPump for device {device_id} to {payload.masterPump}")
 
     if payload.sleepMode is not None and payload.sleepMode != device.sleepMode:
             device.sleepMode = payload.sleepMode
-            changes.append(f"Updated master Pump to {payload.sleepMode}")
+            changes.append(f"Updated Sleep Mode to {sleepModeStat}")
     if changes:
         new_system_log = SystemLog(
                                 deviceID=device_id,
@@ -336,7 +371,10 @@ async def create_pod(
             new_pod.manualMoistureLevel = None
             new_pod.manualLightIntensity = None
 
+        new_system_log = SystemLog(deviceID = device_id, message=f"{new_pod.podName} Activated Successfully")
+
         db.add(new_pod)
+        db.add(new_system_log)
         db.commit()
         db.refresh(new_pod)
 
@@ -391,6 +429,40 @@ async def create_pod(
                 logger.error(f"Failed to create plant: {str(e)}", exc_info=True)
                 raise HTTPException(status_code=500, detail="Internal Server Error")
 
+@router.delete("/pods/{device_id}/{pod_id}")
+async def delete_pod(device_id: str, pod_id: str, db: Session = Depends(get_db)):
+    pod = db.query(Pod).filter(Pod.podID == pod_id).first()
+          
+    if not pod:
+             raise HTTPException(
+                      status_code=404,
+                      detail="Pod not found"
+                  )
+    db.delete(pod)
+    new_system_log = SystemLog(
+                  deviceID = device_id, message=f"Deleted {pod.podName}"
+             )
+    db.add(new_system_log)
+    db.commit()
+
+    message_id = str(uuid.uuid4())
+    mqtt_payload = {
+         "messageID": message_id,
+         "deviceID": device_id,
+         "podID": pod_id
+    }
+    topic = mqtt_topics.delete_pod(device_id)
+    ack = await mqttService.publish_and_wait_ack(topic, mqtt_payload, ack_message_id=message_id,
+                timeout=10.0)
+
+    if ack.get("status") != "success":
+                logger.error(
+                    f"ESP32 rejected pod activation: "
+                    f"{ack}"
+                )
+    return {
+                "message": "Pod deleted successfully"
+            }
 
 @router.patch("/pods/{device_id}/{pod_id}/mode")
 async def update_pod_mode(device_id:str, pod_id:str, payload: ModeUpdate, db: Session = Depends(get_db)):
@@ -398,6 +470,8 @@ async def update_pod_mode(device_id:str, pod_id:str, payload: ModeUpdate, db: Se
     if not pod:
         raise HTTPException(status_code=404, detail="Pod not found")
     pod.mode = payload.mode
+    new_system_log = SystemLog(deviceID=device_id, message=f"Updated Mode to {pod.mode} in {pod.podName}")
+    db.add(new_system_log)
     db.commit()
 
     message_id = str(uuid.uuid4())
@@ -434,6 +508,7 @@ async def update_pod_controls(
 ):
     print(payload)
     pod = db.query(Pod).filter(Pod.podID == pod_id).first()
+    device = db.query(Device).filter(Device.deviceID == device_id).first()
     if not pod:
         raise HTTPException(status_code=404, detail="Pod not found")
 
@@ -442,44 +517,65 @@ async def update_pod_controls(
             status_code=400, 
             detail="Pod must be in MANUAL mode to adjust custom controls"
         )
-    print(pod_id)
-    update_data = payload.model_dump(exclude_unset=True)
-    
-    # Map frontend camelCase/snake_case to SQLAlchemy model attributes
-    if "podPump" in update_data:
-        pod.podPump = update_data["podPump"]
-    if "podLight" in update_data:
-        pod.podLight = update_data["podLight"]
-    if "manualLightIntensity" in update_data:
-        pod.manualLightIntensity = update_data["manualLightIntensity"]
-    if "manualMoistureLevel" in update_data:
-        pod.manualMoistureLevel = update_data["manualMoistureLevel"]
+    changes = []
+    mqtt_publish = False
+    podLight = "ON" if payload.podLight else "OFF"
+    podPump = "ON" if payload.podPump else "OFF"
+    canControlLight = pod.podLight and device.masterLight and payload.manualLightIntensity != pod.manualLightIntensity
+    canControlPump = pod.podPump
+    if payload.podLight is not None and payload.podLight != pod.podLight:
+         pod.podLight = payload.podLight
+         changes.append(f"Updated {pod.podName} Light to {podLight}")
+         mqtt_publish = False
+    if payload.podPump is not None and payload.podPump != pod.podPump:
+             pod.podPump = payload.podPump
+             changes.append(f"Updated {pod.podName} Pump to {podPump}")
+             mqtt_publish = False
+    if payload.podPumpTimer is not None and canControlPump:
+         pod.podPumpTimer = payload.podPumpTimer
+         changes.append(f"Updated {pod.podName} Pod Pump Timer to {payload.podPumpTimer}s")
+         mqtt_publish = True
+    if payload.manualLightIntensity is not None and canControlLight:
+         pod.manualLightIntensity = payload.manualLightIntensity
+         changes.append(f"Updated {pod.podName} Light Intensity to {payload.manualLightIntensity}%")
+         mqtt_publish = True
+    if payload.manualMoistureLevel is not None and payload.manualMoistureLevel != pod.manualMoistureLevel:
+         pod.manualMoistureLevel = payload.manualMoistureLevel
+         changes.append(f"Updated {pod.podName} Moisture Level to {payload.manualMoistureLevel}%")
+         mqtt_publish = True
 
+    if changes:
+         new_system_log = SystemLog(
+              deviceID = device_id, message=", ".join(changes)
+         )
+         db.add(new_system_log)
     db.commit()
 
-    message_id = str(uuid.uuid4())
-    mqtt_payload = {
-                        "messageID": message_id,
-                        "deviceID": device_id,
-                        "podID": pod_id,
-                        "podPump": pod.podPump,
-                        "podLight": pod.podLight,
-                        "manualLightIntensity": pod.manualLightIntensity,
-                        "manualMoistureLevel": pod.manualMoistureLevel
-                    }
-            
-    mqtt_topic = mqtt_topics.pod_command(device_id)
-    ack = await mqttService.publish_and_wait_ack(
-                        topic=mqtt_topic,
-                        payload=mqtt_payload,
-                        ack_message_id=message_id,
-                        timeout=10.0
-                    )
-            
-    if ack.get("status") != "success":
-                logger.error(
-                            f"ESP32 rejected Change Mode: "
-                            f"{ack}")
+    # message_id = str(uuid.uuid4())
+    # mqtt_payload = {
+    #                     "messageID": message_id,
+    #                     "deviceID": device_id,
+    #                     "podID": pod_id,
+    #                     "podPump": payload.podPump,
+    #                     "podLight": payload.podLight,
+    #                     "manualLightIntensity": payload.manualLightIntensity,
+    #                     "manualMoistureLevel": payload.manualMoistureLevel,
+    #                     "podPumpTimer": payload.podPumpTimer
+    #                 }
+    # # if payload.podPumpTimer is not None and pod.podPump == True:   
+    # if mqtt_publish:     
+    #     mqtt_topic = mqtt_topics.pod_command(device_id)
+    #     ack = await mqttService.publish_and_wait_ack(
+    #                         topic=mqtt_topic,
+    #                         payload=mqtt_payload,
+    #                         ack_message_id=message_id,
+    #                         timeout=10.0
+    #                     )
+                
+    #     if ack.get("status") != "success":
+    #                 logger.error(
+    #                             f"ESP32 rejected Change Mode: "
+    #                             f"{ack}")
     return {"status": "updated",
             "pod": {
                 "podID": pod.podID,
@@ -520,7 +616,7 @@ def get_system_logs(
     }
 
 @router.post("/devices/{device_id}/pods/data-log")
-def create_pods_data_log(
+def create_data_log(
     device_id: str,
     payload: CreatePodsDataLog,
     db: Session = Depends(get_db)
@@ -854,4 +950,45 @@ def get_system_logs(
         "hasMore": has_more,
         "startTime": start_time,
         "endTime": end_time
+    }
+
+@router.get("/devices/{device_id}/floater")
+def get_floater_status(device_id: str, db: Session = Depends(get_db)):
+    device = db.query(Device).filter(
+             Device.deviceID == device_id
+         ).all()
+     
+    if not device:
+        raise HTTPException(
+                 status_code=404,
+                 detail="Device not found"
+             )
+    
+    return {
+         "deviceID": device_id,
+         "floater": device[0].floater
+    }
+
+@router.patch("/devices/{device_id}/floater_status")
+def update_floater_status(device_id: str, floater: bool, db: Session = Depends(get_db)):
+    device = db.query(Device).filter(
+             Device.deviceID == device_id
+         ).first()
+     
+    if not device:
+        raise HTTPException(
+                 status_code=404,
+                 detail="Device not found"
+             )
+    
+    device.floater = floater
+    floterStat = "FULL" if floater else "LOW"
+    new_system_log = SystemLog(deviceID=device_id, message=f"Water Level {floterStat}")
+    db.add(new_system_log)
+    db.commit()
+    db.refresh(device)
+    
+    return {
+         "deviceID": device_id,
+         "floater": device.floater
     }
