@@ -49,6 +49,7 @@ class MQTTService:
             self.username,
             self.password
         )
+        self.client.tls_set()
 
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
