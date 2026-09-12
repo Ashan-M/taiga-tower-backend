@@ -4,6 +4,7 @@ from typing import Optional, List
 from pydantic import BaseModel, Field
 from datetime import datetime
 from sqlalchemy import func
+import time
 
 from app.database import get_db
 from app.models import Pod, Device, Plant, PodLog, PodDataLog, SystemLog
@@ -502,67 +503,62 @@ async def update_pod_mode(device_id:str, pod_id:str, payload: ModeUpdate, db: Se
 @router.patch("/pods/{device_id}/{pod_id}/controllers")
 async def update_pod_controls(
     device_id: str,
-    pod_id: str, 
-    payload: PodControlUpdate, 
+    pod_id: str,
+    payload: PodControlUpdate,
     db: Session = Depends(get_db)
 ):
+
+    
+    
+    total_start = time.perf_counter()
+
     print(payload)
+
+    # ---------------- POD QUERY ----------------
+    t = time.perf_counter()
+
     pod = db.query(Pod).filter(Pod.podID == pod_id).first()
+
+    print(
+        f"Pod query: {(time.perf_counter() - t) * 1000:.2f} ms"
+    )
+
+    # ---------------- DEVICE QUERY ----------------
+    t = time.perf_counter()
+
     device = db.query(Device).filter(Device.deviceID == device_id).first()
-    if not pod:
-        raise HTTPException(status_code=404, detail="Pod not found")
 
-    if pod.mode != "MANUAL":
-        raise HTTPException(
-            status_code=400, 
-            detail="Pod must be in MANUAL mode to adjust custom controls"
-        )
-    changes = []
-    mqtt_publish = False
-    podLight = "ON" if payload.podLight else "OFF"
-    podPump = "ON" if payload.podPump else "OFF"
-    canControlLight = pod.podLight and device.masterLight and payload.manualLightIntensity != pod.manualLightIntensity
-    canControlPump = pod.podPump
-    if payload.podLight is not None and payload.podLight != pod.podLight:
-         pod.podLight = payload.podLight
-         changes.append(f"Updated {pod.podName} Light to {podLight}")
-         mqtt_publish = False
-    if payload.podPump is not None and payload.podPump != pod.podPump:
-             pod.podPump = payload.podPump
-             changes.append(f"Updated {pod.podName} Pump to {podPump}")
-             mqtt_publish = False
-    if payload.podPumpTimer is not None and canControlPump:
-         pod.podPumpTimer = payload.podPumpTimer
-         changes.append(f"Updated {pod.podName} Pod Pump Timer to {payload.podPumpTimer}s")
-         mqtt_publish = True
-    if payload.manualLightIntensity is not None and canControlLight:
-         pod.manualLightIntensity = payload.manualLightIntensity
-         changes.append(f"Updated {pod.podName} Light Intensity to {payload.manualLightIntensity}%")
-         mqtt_publish = True
-    if payload.manualMoistureLevel is not None and payload.manualMoistureLevel != pod.manualMoistureLevel:
-         pod.manualMoistureLevel = payload.manualMoistureLevel
-         changes.append(f"Updated {pod.podName} Moisture Level to {payload.manualMoistureLevel}%")
-         mqtt_publish = True
+    print(
+        f"Device query: {(time.perf_counter() - t) * 1000:.2f} ms"
+    )
 
-    if changes:
-         new_system_log = SystemLog(
-              deviceID = device_id, message=", ".join(changes)
-         )
-         db.add(new_system_log)
+    # your existing validation + modifications here
+
+    # ---------------- COMMIT ----------------
+    t = time.perf_counter()
+
     db.commit()
 
-    # message_id = str(uuid.uuid4())
-    # mqtt_payload = {
-    #                     "messageID": message_id,
-    #                     "deviceID": device_id,
-    #                     "podID": pod_id,
-    #                     "podPump": payload.podPump,
-    #                     "podLight": payload.podLight,
-    #                     "manualLightIntensity": payload.manualLightIntensity,
-    #                     "manualMoistureLevel": payload.manualMoistureLevel,
-    #                     "podPumpTimer": payload.podPumpTimer
-    #                 }
-    # # if payload.podPumpTimer is not None and pod.podPump == True:   
+    print(
+        f"DB commit: {(time.perf_counter() - t) * 1000:.2f} ms"
+    )
+
+    print(
+        f"TOTAL BEFORE MQTT: {(time.perf_counter() - total_start) * 1000:.2f} ms"
+    )
+
+    message_id = str(uuid.uuid4())
+    mqtt_payload = {
+                        "messageID": message_id,
+                        "deviceID": device_id,
+                        "podID": pod_id,
+                        "podPump": payload.podPump,
+                        "podLight": payload.podLight,
+                        "manualLightIntensity": payload.manualLightIntensity,
+                        "manualMoistureLevel": payload.manualMoistureLevel,
+                        "podPumpTimer": payload.podPumpTimer
+                    }
+    # if payload.podPumpTimer is not None and pod.podPump == True:   
     # if mqtt_publish:     
     #     mqtt_topic = mqtt_topics.pod_command(device_id)
     #     ack = await mqttService.publish_and_wait_ack(
