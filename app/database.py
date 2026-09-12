@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Set your PostgreSQL credentials in .env or update this string
-DATABASE_URL = os.getenv("DATABASE_URL_LOCAL")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set")
