@@ -3,6 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import declarative_base, sessionmaker
 from dotenv import load_dotenv
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -33,25 +34,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-# def get_db():
-#     import time
-
-#     start = time.perf_counter()
-
-#     db = SessionLocal()
-
-#     print(
-#         f"SessionLocal(): {(time.perf_counter() - start) * 1000:.2f} ms"
-#     )
-
-#     try:
-#         yield db
-#     finally:
-#         start = time.perf_counter()
-
-#         db.close()
-
-#         print(
-#             f"db.close(): {(time.perf_counter() - start) * 1000:.2f} ms"
-#         )
